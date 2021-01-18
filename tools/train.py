@@ -36,7 +36,7 @@ from utils.utils import create_logger, FullModel, get_rank
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train segmentation network')
-    
+
     parser.add_argument('--cfg',
                         help='experiment configure file name',
                         required=True,
@@ -219,7 +219,7 @@ def main():
     else:
         raise ValueError('Only Support SGD optimizer')
 
-    epoch_iters = np.int(train_dataset.__len__() / 
+    epoch_iters = np.int(train_dataset.__len__() /
                         config.TRAIN.BATCH_SIZE_PER_GPU / len(gpus))
     best_mIoU = 0
     last_epoch = 0
@@ -227,7 +227,7 @@ def main():
         model_state_file = os.path.join(final_output_dir,
                                         'checkpoint.pth.tar')
         if os.path.isfile(model_state_file):
-            checkpoint = torch.load(model_state_file, 
+            checkpoint = torch.load(model_state_file,
                         map_location=lambda storage, loc: storage)
             best_mIoU = checkpoint['best_mIoU']
             last_epoch = checkpoint['epoch']
@@ -240,23 +240,23 @@ def main():
     end_epoch = config.TRAIN.END_EPOCH + config.TRAIN.EXTRA_EPOCH
     num_iters = config.TRAIN.END_EPOCH * epoch_iters
     extra_iters = config.TRAIN.EXTRA_EPOCH * epoch_iters
-    
+
     for epoch in range(last_epoch, end_epoch):
         if distributed:
             train_sampler.set_epoch(epoch)
         if epoch >= config.TRAIN.END_EPOCH:
-            train(config, epoch-config.TRAIN.END_EPOCH, 
-                  config.TRAIN.EXTRA_EPOCH, epoch_iters, 
-                  config.TRAIN.EXTRA_LR, extra_iters, 
-                  extra_trainloader, optimizer, model, 
+            train(config, epoch-config.TRAIN.END_EPOCH,
+                  config.TRAIN.EXTRA_EPOCH, epoch_iters,
+                  config.TRAIN.EXTRA_LR, extra_iters,
+                  extra_trainloader, optimizer, model,
                   writer_dict, device)
         else:
-            train(config, epoch, config.TRAIN.END_EPOCH, 
+            train(config, epoch, config.TRAIN.END_EPOCH,
                   epoch_iters, config.TRAIN.LR, num_iters,
                   trainloader, optimizer, model, writer_dict,
                   device)
 
-        valid_loss, mean_IoU, IoU_array = validate(config, 
+        valid_loss, mean_IoU, IoU_array = validate(config,
                     testloader, model, writer_dict, device)
 
         if args.local_rank == 0:

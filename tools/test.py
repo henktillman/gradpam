@@ -32,7 +32,7 @@ from utils.utils import create_logger, FullModel
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train segmentation network')
-    
+
     parser.add_argument('--cfg',
                         help='experiment configure file name',
                         required=True,
@@ -75,8 +75,9 @@ def main():
     else:
         model_state_file = os.path.join(final_output_dir,
                                         'best.pth')
+    model_state_file = 'pretrained_models/hrnet_w18_small_model_v1.pth'
     logger.info('=> loading model from {}'.format(model_state_file))
-        
+
     pretrained_dict = torch.load(model_state_file)
     model_dict = model.state_dict()
     pretrained_dict = {k[6:]: v for k, v in pretrained_dict.items()
@@ -115,23 +116,23 @@ def main():
         shuffle=False,
         num_workers=config.WORKERS,
         pin_memory=True)
-    
+
     start = timeit.default_timer()
     if 'val' in config.DATASET.TEST_SET:
-        mean_IoU, IoU_array, pixel_acc, mean_acc = testval(config, 
-                                                           test_dataset, 
-                                                           testloader, 
+        mean_IoU, IoU_array, pixel_acc, mean_acc = testval(config,
+                                                           test_dataset,
+                                                           testloader,
                                                            model)
-    
+
         msg = 'MeanIU: {: 4.4f}, Pixel_Acc: {: 4.4f}, \
-            Mean_Acc: {: 4.4f}, Class IoU: '.format(mean_IoU, 
+            Mean_Acc: {: 4.4f}, Class IoU: '.format(mean_IoU,
             pixel_acc, mean_acc)
         logging.info(msg)
         logging.info(IoU_array)
     elif 'test' in config.DATASET.TEST_SET:
-        test(config, 
-             test_dataset, 
-             testloader, 
+        test(config,
+             test_dataset,
+             testloader,
              model,
              sv_dir=final_output_dir)
 

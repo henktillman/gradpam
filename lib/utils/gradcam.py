@@ -150,8 +150,8 @@ class _SegBaseWrapper(_BaseWrapper):
 
     def _encode_one_hot(self, labels, pixel_i, pixel_j):
         one_hot = torch.zeros_like(self.logits).to(self.device)
-        scattered = one_hot[:,:,pixel_i,pixel_j].scatter_(1, labels[:,:,pixel_i,pixel_j], 1.0)
-        one_hot[:,:,pixel_i,pixel_j] = scattered
+        one_hot[:,:,pixel_i,pixel_j].scatter_(1, labels[:,:,pixel_i,pixel_j], 1.0)
+        # one_hot[:,:,pixel_i,pixel_j] = scattered
         return one_hot
 
     def backward(self, labels, pixel_i, pixel_j):

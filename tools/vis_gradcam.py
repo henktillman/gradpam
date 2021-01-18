@@ -1,6 +1,7 @@
 import argparse
 import os
 import pprint
+import random
 import shutil
 import sys
 
@@ -9,14 +10,17 @@ import time
 import timeit
 from pathlib import Path
 
+from collections import Sequence
 import cv2
 import random
 import numpy as np
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 import torch
 import torch.nn as nn
+from torch.nn import functional as F
 import torch.backends.cudnn as cudnn
 
 import _init_paths
@@ -160,7 +164,7 @@ def generate_save_path(output_dir, gradcam_kwargs, suffix='', ext='jpg'):
     save_path = os.path.join(output_dir, f'{fname}.{ext}')
     return save_path
 
-def generate_fname(kwargs, order=('image', 'pixel_i', 'pixel_j')):
+def generate_fname(kwargs, order=('image', 'pixel_i', 'pixel_j', 'class_name')):
     parts = []
     kwargs = kwargs.copy()
     for key in order:
@@ -227,14 +231,85 @@ def get_random_pixels(n, pixels, bin_size=300, seed=0):
         pixels.append(pixels_per_bin[indices[0]])
     return pixels
 
+
+# def occlusion_sensitivity(
+#     model, images, sal, mean=None, patch=90, stride=90, n_batches=2
+# ):
+#     """
+#     "Grad-CAM: Visual Explanations from Deep Networks via Gradient-based Localization"
+#     https://arxiv.org/pdf/1610.02391.pdf
+#     Look at Figure A5 on page 17
+#     Originally proposed in:
+#     "Visualizing and Understanding Convolutional Networks"
+#     https://arxiv.org/abs/1311.2901
+#     """
+#     torch.set_grad_enabled(False)
+#     model.eval()
+#     mean = mean if mean else 0
+#     patch_H, patch_W = patch if isinstance(patch, Sequence) else (patch, patch)
+#     pad_H, pad_W = patch_H // 2, patch_W // 2
+
+#     # Padded image
+#     images = F.pad(images, (pad_W, pad_W, pad_H, pad_H), value=mean)
+#     B, _, H, W = images.shape
+#     new_H = (H - patch_H) // stride + 1
+#     new_W = (W - patch_W) // stride + 1
+
+#     # Prepare sampling grids
+#     anchors = []
+#     grid_h = 0
+#     while grid_h <= H - patch_H:
+#         grid_w = 0
+#         while grid_w <= W - patch_W:
+#             grid_w += stride
+#             anchors.append((grid_h, grid_w))
+#         grid_h += stride
+
+#     __import__('ipdb').set_trace()
+#     pred_probs, pred_labels = sal.forward(images)
+#     # baseline = np.where(pred_labels[:,:,180,1000].numpy()[0]==2)[0].item()
+#     baseline = torch.where(pred_labels[0,:,180,1000]==2)[0].item()
+#     baseline = pred_probs[0,baseline,180,1000].item()
+#     # Baseline score without occlusion
+#     # baseline = model(images).detach().gather(1, ids)
+
+#     # Compute per-pixel logits
+#     scoremaps = []
+#     for i in tqdm(range(0, len(anchors), n_batches), leave=False):
+#         batch_images = []
+#         batch_ids = []
+#         for grid_h, grid_w in anchors[i : i + n_batches]:
+#             images_ = images.clone()
+#             images_[..., grid_h : grid_h + patch_H, grid_w : grid_w + patch_W] = mean
+#             batch_images.append(images_)
+#             # batch_ids.append(ids)
+#         batch_images = torch.cat(batch_images, dim=0)
+#         # batch_ids = torch.cat(batch_ids, dim=0)
+#         __import__('ipdb').set_trace()
+#         probs, labels = sal.forward(batch_images)
+#         scoremaps += torch.where(labels[:,:,180,1000]==2)[1].tolist()
+#         # scores = model(batch_images).detach().gather(1, batch_ids)
+#         # scoremaps += list(torch.split(scores, B))
+
+#     diffmaps = torch.cat(scoremaps, dim=1) - baseline
+#     diffmaps = diffmaps.view(B, new_H, new_W)
+
+#     return diffmaps
+
+
+
+
+
+
 def main():
+    random.seed(11)
     args = parse_args()
 
     logger, final_output_dir, _ = create_logger(
         config, args.cfg, 'vis_gradcam')
 
-    logger.info(pprint.pformat(args))
-    logger.info(pprint.pformat(config))
+    # logger.info(pprint.pformat(args))
+    # logger.info(pprint.pformat(config))
 
     # cudnn related setting
     cudnn.benchmark = config.CUDNN.BENCHMARK
@@ -248,7 +323,7 @@ def main():
     dump_input = torch.rand(
         (1, 3, config.TRAIN.IMAGE_SIZE[1], config.TRAIN.IMAGE_SIZE[0])
     )
-    logger.info(get_model_summary(model.cuda(), dump_input.cuda()))
+    # logger.info(get_model_summary(model.cuda(), dump_input.cuda()))
 
     if config.TEST.MODEL_FILE:
         model_state_file = config.TEST.MODEL_FILE
@@ -256,14 +331,14 @@ def main():
         model_state_file = os.path.join(final_output_dir,
                                         'best.pth')
     logger.info('=> loading model from {}'.format(model_state_file))
-
+    # __import__('ipdb').set_trace()
     pretrained_dict = torch.load(model_state_file)
     model_dict = model.state_dict()
     pretrained_dict = {k[6:]: v for k, v in pretrained_dict.items()
                         if k[6:] in model_dict.keys()}
-    for k, _ in pretrained_dict.items():
-        logger.info(
-            '=> loading {} from pretrained model'.format(k))
+    # for k, _ in pretrained_dict.items():
+    #     logger.info(
+    #         '=> loading {} from pretrained model'.format(k))
     model_dict.update(pretrained_dict)
     model.load_state_dict(model_dict)
 
@@ -275,8 +350,10 @@ def main():
             classes=class_names)
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    # device = 'cpu'
     model = model.to(device).eval()
-
+    # for x in model.named_modules():
+    #     print(x)
     # Retrieve input image corresponding to args.image_index
     test_size = (config.TEST.IMAGE_SIZE[1], config.TEST.IMAGE_SIZE[0])
     test_dataset = eval('datasets.'+config.DATASET.DATASET)(
@@ -305,6 +382,8 @@ def main():
     if config.NBDT.USE_NBDT:
         target_layers = ['model.' + layer for layer in target_layers]
 
+    pct_pixels_inside_list = []
+    pct_mass_inside_list = []
     def generate_and_save_saliency(
             image_index, pixel_i=None, pixel_j=None, crop_size=None,
             normalize=False):
@@ -329,38 +408,93 @@ def main():
             logger.info(f'=> Bounds: ({minimum}, {maximum})')
 
             heatmaps.append(gradcam_region)
-            output_dir = generate_output_dir(final_output_dir, args.vis_mode, layer, config.NBDT.USE_NBDT, nbdt_node_wnid, args.crop_size, args.nbdt_node_wnids_for)
-            save_path = generate_save_path(output_dir, gradcam_kwargs)
-            logger.info('Saving {} heatmap at {}...'.format(args.vis_mode, save_path))
+            print('start')
+            image = test_dataset[image_index][0]
+            coords = gradcam_region.nonzero().cpu().numpy()
 
-            if normalize:
-                gradcam_region = GradCAM.normalize(gradcam_region)
-                save_gradcam(save_path, gradcam_region, raw_image, save_npy=not args.skip_save_npy)
-            else:
-                save_gradcam(save_path, gradcam_region, raw_image, minimum=minimum, maximum=maximum, save_npy=not args.skip_save_npy)
+            centered_coords = coords - np.array([0, 0, pixel_i, pixel_j])
+            centered_coords = np.abs(centered_coords)
+            # Filter function for determining whether pixel is within receptive field
+            f = lambda x: x[2] < 200 and x[3] < 200
+            within_receptive_field = np.apply_along_axis(f, 1, centered_coords)
+            coords = coords[within_receptive_field]
+            gradcam_region = gradcam_region.cpu()
+            def v(x):
+                return gradcam_region[x[0], x[1], x[2], x[3]]
+            within_weight = np.apply_along_axis(v, 1, coords).sum()
 
-            output_dir_original = output_dir + '_original'
-            os.makedirs(output_dir_original, exist_ok=True)
-            save_path_original = generate_save_path(output_dir_original, gradcam_kwargs, ext='jpg')
-            logger.info('Saving {} original at {}...'.format(args.vis_mode, save_path_original))
-            cv2.imwrite(save_path_original, raw_image)
+            # count = 0
+            # inside_mass = 0
+            # total_mass = 0
+            # for coord in foo:
+            #     total_mass += gradcam_region[coord[0], coord[1], coord[2], coord[3]]
+            #     image[:, coord[2], coord[3]] = torch.zeros(1, 3)
+            #     # 400px receptive field
+            #     if abs(coord[2] - pixel_i) < 200 and abs(coord[3] - pixel_j) < 200:
+            #         count += 1
+            #         inside_mass += gradcam_region[coord[0], coord[1], coord[2], coord[3]]
 
-            if crop_size and pixel_i and pixel_j:
-                continue
-            output_dir += '_overlap'
-            os.makedirs(output_dir, exist_ok=True)
-            save_path_overlap = generate_save_path(output_dir, gradcam_kwargs, ext='npy')
-            save_path_plot = generate_save_path(output_dir, gradcam_kwargs, ext='jpg')
-            if not args.skip_save_npy:
-                logger.info('Saving {} overlap data at {}...'.format(args.vis_mode, save_path_overlap))
-            logger.info('Saving {} overlap plot at {}...'.format(args.vis_mode, save_path_plot))
-            save_overlap(save_path_overlap, save_path_plot, gradcam_region, label, save_npy=not args.skip_save_npy)
-        if len(heatmaps) > 1:
-            combined = torch.prod(torch.stack(heatmaps, dim=0), dim=0)
-            combined /= combined.max()
-            save_path = generate_save_path(final_output_dir, args.vis_mode, gradcam_kwargs, 'combined', config.NBDT.USE_NBDT, nbdt_node_wnid)
-            logger.info('Saving combined {} heatmap at {}...'.format(args.vis_mode, save_path))
-            save_gradcam(save_path, combined, raw_image)
+            percent_mass_inside = within_weight / gradcam_region.sum()
+            percent_mass_outside = 1 - percent_mass_inside
+            percent_pixels_inside = np.sum(within_receptive_field) / len(within_receptive_field)
+            percent_pixels_outside = 1 - percent_pixels_inside
+
+            pct_mass_inside_list.append(percent_mass_inside)
+            pct_pixels_inside_list.append(percent_pixels_inside)
+
+            # image = torch.from_numpy(image).unsqueeze(0).to(gradcam_region.device)
+            # pred_probs, pred_labels = gradcam.forward(image)
+            # del image
+            # torch.cuda.empty_cache()
+            # bar = pred_probs[:,:,pixel_i,pixel_j]
+            # baz = pred_labels[:,:,pixel_i,pixel_j]
+
+            print("percent_mass_inside ", percent_mass_inside)
+            print("percent_pixels_inside ", percent_pixels_inside)
+
+            # __import__('ipdb').set_trace()
+            # image = test_dataset[image_index][0]
+            # image = torch.from_numpy(image).unsqueeze(0).to(gradcam_region.device)
+            # pred_probs, pred_labels = gradcam.forward(image)
+            # ordered_class_names = [class_names[i] for i in pred_labels[0,:,180,1000]]
+            # target_index = ordered_class_names.index('building')
+            # images = image
+
+            # pred_labels[:, [target_index], :, :]
+            # occlusion_map = occlusion_sensitivity(model, images, gradcam)
+
+            # output_dir = generate_output_dir(final_output_dir, args.vis_mode, layer, config.NBDT.USE_NBDT, nbdt_node_wnid, args.crop_size, args.nbdt_node_wnids_for)
+            # save_path = generate_save_path(output_dir, gradcam_kwargs)
+            # logger.info('Saving {} heatmap at {}...'.format(args.vis_mode, save_path))
+
+            # if normalize:
+            #     gradcam_region = GradCAM.normalize(gradcam_region)
+            #     save_gradcam(save_path, gradcam_region, raw_image, save_npy=not args.skip_save_npy)
+            # else:
+            #     save_gradcam(save_path, gradcam_region, raw_image, minimum=minimum, maximum=maximum, save_npy=not args.skip_save_npy)
+
+            # output_dir_original = output_dir + '_original'
+            # os.makedirs(output_dir_original, exist_ok=True)
+            # save_path_original = generate_save_path(output_dir_original, gradcam_kwargs, ext='jpg')
+            # logger.info('Saving {} original at {}...'.format(args.vis_mode, save_path_original))
+            # cv2.imwrite(save_path_original, raw_image)
+
+        #     if crop_size and pixel_i and pixel_j:
+        #         continue
+        #     output_dir += '_overlap'
+        #     os.makedirs(output_dir, exist_ok=True)
+        #     save_path_overlap = generate_save_path(output_dir, gradcam_kwargs, ext='npy')
+        #     save_path_plot = generate_save_path(output_dir, gradcam_kwargs, ext='jpg')
+        #     if not args.skip_save_npy:
+        #         logger.info('Saving {} overlap data at {}...'.format(args.vis_mode, save_path_overlap))
+        #     logger.info('Saving {} overlap plot at {}...'.format(args.vis_mode, save_path_plot))
+        #     save_overlap(save_path_overlap, save_path_plot, gradcam_region, label, save_npy=not args.skip_save_npy)
+        # if len(heatmaps) > 1:
+        #     combined = torch.prod(torch.stack(heatmaps, dim=0), dim=0)
+        #     combined /= combined.max()
+        #     save_path = generate_save_path(final_output_dir, args.vis_mode, gradcam_kwargs, 'combined', config.NBDT.USE_NBDT, nbdt_node_wnid)
+        #     logger.info('Saving combined {} heatmap at {}...'.format(args.vis_mode, save_path))
+        #     save_gradcam(save_path, combined, raw_image)
 
     nbdt_node_wnids = args.nbdt_node_wnid or []
     cls = args.nbdt_node_wnids_for
@@ -383,6 +517,7 @@ def main():
             image, label, _, name = test_dataset[image_index]
             image = torch.from_numpy(image).unsqueeze(0).to(device)
             logger.info("Using image {}...".format(name))
+
             pred_probs, pred_labels = gradcam.forward(image)
 
             maximum, minimum = -1000, 0
@@ -424,27 +559,45 @@ def main():
                     args.pixel_cartesian_product)
             logger.info(f'Running on {len(pixels)} pixels.')
 
-            for pixel_i, pixel_j in pixels:
-                pixel_i, pixel_j = int(pixel_i), int(pixel_j)
+            # for pixel_index in range(len(pixels)):
+            for _ in range(1):
+                # pixel_i, pixel_j = int(pixels[pixel_index][0]), int(pixels[pixel_index][1])
+                # pixel_i, pixel_j = int(args.pixel_i[0]), int(args.pixel_j[0])
+
+                pixel_i = random.randint(100, test_size[0] - 100)
+                pixel_j = random.randint(100, test_size[1] - 100)
+                # pixel_i, pixel_j = ps[pixel_index]
+
+                top_class_index = pred_labels[0,0,pixel_i,pixel_j]
+                top_class_name = class_names[top_class_index]
+                print("Running on pixel ({}, {})".format(pixel_i, pixel_j))
                 assert pixel_i < test_size[0] and pixel_j < test_size[1], \
                     "Pixel ({},{}) is out of bounds for image of size ({},{})".format(
                         pixel_i,pixel_j,test_size[0],test_size[1])
 
                 # Run backward pass
                 # Note: Computes backprop wrt most likely predicted class rather than gt class
-                gradcam_kwargs = {'image': image_index, 'pixel_i': pixel_i, 'pixel_j': pixel_j}
+
+                gradcam_kwargs = {'image': image_index, 'pixel_i': pixel_i, 'pixel_j': pixel_j, 'class_name': top_class_name}
                 if args.suffix:
                     gradcam_kwargs['suffix'] = args.suffix
                 logger.info(f'Running {args.vis_mode} on image {image_index} at pixel ({pixel_i},{pixel_j}). Using filename suffix: {args.suffix}')
                 output_pixel_i, output_pixel_j = compute_output_coord(pixel_i, pixel_j, test_size, pred_probs.shape[2:])
 
+                # ordered_class_names = [class_names[i] for i in pred_labels[0,:,pixel_i,pixel_j]]
+                # target_index = ordered_class_names.index('car')
+                print("TOP CLASS", pred_labels[0, 0, pixel_i, pixel_j], pred_probs[0,0,pixel_i,pixel_j], class_names[pred_labels[0, 0, pixel_i, pixel_j]])
+                print("######################################")
+                target_index = 0
                 if not getattr(Saliency, 'whole_image', False):
-                    gradcam.backward(pred_labels[:, [0], :, :], output_pixel_i, output_pixel_j)
+                    gradcam.backward(pred_labels[:, [target_index], :, :], output_pixel_i, output_pixel_j)
 
                 if args.crop_size <= 0:
-                    generate_and_save_saliency(image_index)
+                    generate_and_save_saliency(image_index, pixel_i, pixel_j)
                 else:
                     generate_and_save_saliency(image_index, pixel_i, pixel_j, args.crop_size)
+                print("AVERAGE SO FAR", np.average(pct_pixels_inside_list))
+                print("AVERAGE MASS SO FAR", np.average(pct_mass_inside_list))
 
             logger.info(f'=> Final bounds are: ({minimum}, {maximum})')
 
@@ -463,6 +616,10 @@ def main():
     if not nbdt_node_wnids:
         nbdt_node_wnid = None
         run()
+        __import__('ipdb').set_trace()
+        print(np.average(pct_pixels_inside_list))
+        print(np.average(pct_mass_inside_list))
+        print('done')
 
 
 if __name__ == '__main__':

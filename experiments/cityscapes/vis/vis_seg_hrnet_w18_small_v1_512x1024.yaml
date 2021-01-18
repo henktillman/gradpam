@@ -2,10 +2,10 @@ CUDNN:
   BENCHMARK: true
   DETERMINISTIC: false
   ENABLED: true
-GPUS: (0,)
+GPUS: (4,5)
 OUTPUT_DIR: 'output'
 LOG_DIR: 'log'
-WORKERS: 4
+WORKERS: 2
 PRINT_FREQ: 100
 
 DATASET:
@@ -79,7 +79,7 @@ TRAIN:
   BATCH_SIZE_PER_GPU: 3
   SHUFFLE: true
   BEGIN_EPOCH: 0
-  END_EPOCH: 484
+  END_EPOCH: 9
   RESUME: true
   OPTIMIZER: sgd
   LR: 0.01
@@ -99,3 +99,4 @@ TEST:
   BATCH_SIZE_PER_GPU: 4
   FLIP_TEST: false
   MULTI_SCALE: false
+  # MODEL_FILE: output/cityscapes/vis_seg_hrnet_w18_small_v1_512x1024/checkpoint.pth.tar
