@@ -382,8 +382,6 @@ def main():
     if config.NBDT.USE_NBDT:
         target_layers = ['model.' + layer for layer in target_layers]
 
-    pct_pixels_inside_list = []
-    pct_mass_inside_list = []
     def generate_and_save_saliency(
             image_index, pixel_i=None, pixel_j=None, crop_size=None,
             normalize=False):
@@ -564,42 +562,79 @@ def main():
                 # pixel_i, pixel_j = int(pixels[pixel_index][0]), int(pixels[pixel_index][1])
                 # pixel_i, pixel_j = int(args.pixel_i[0]), int(args.pixel_j[0])
 
-                pixel_i = random.randint(100, test_size[0] - 100)
-                pixel_j = random.randint(100, test_size[1] - 100)
+                # Loop until we find a matching pair of pixels
+                pixel_i, pixel_j, next_i, next_j = 0, 0, 0, 0
+                # __import__('ipdb').set_trace()
+                found_matching = False
+                while not found_matching:
+                    pixel_i = random.randint(0, test_size[0])
+                    pixel_j = random.randint(0, test_size[1])
+                    true_label = label[pixel_i, pixel_j]
+
+                    for _ in range(1000):
+                        next_i = random.randint(0, test_size[0])
+                        next_j = random.randint(0, test_size[1])
+                        if label[next_i, next_j] != true_label or ((pixel_i - next_i)**2 + (pixel_j - next_j)**2)**0.5 <= 800:
+                            continue
+                        else:
+                            found_matching = True
+                            break
+
+                assert ((pixel_i - next_i)**2 + (pixel_j - next_j)**2)**0.5 > 800 and label[next_i, next_j] == true_label
+
+
                 # pixel_i, pixel_j = ps[pixel_index]
 
-                top_class_index = pred_labels[0,0,pixel_i,pixel_j]
-                top_class_name = class_names[top_class_index]
-                print("Running on pixel ({}, {})".format(pixel_i, pixel_j))
+                # top_class_index = pred_labels[0,0,pixel_i,pixel_j]
+                # top_class_name = class_names[top_class_index]
+                # print("Running on pixel ({}, {})".format(pixel_i, pixel_j))
                 assert pixel_i < test_size[0] and pixel_j < test_size[1], \
                     "Pixel ({},{}) is out of bounds for image of size ({},{})".format(
                         pixel_i,pixel_j,test_size[0],test_size[1])
+                assert next_i < test_size[0] and next_j < test_size[1], \
+                    "Pixel ({},{}) is out of bounds for image of size ({},{})".format(
+                        next_i,next_j,test_size[0],test_size[1])
 
                 # Run backward pass
                 # Note: Computes backprop wrt most likely predicted class rather than gt class
 
-                gradcam_kwargs = {'image': image_index, 'pixel_i': pixel_i, 'pixel_j': pixel_j, 'class_name': top_class_name}
-                if args.suffix:
-                    gradcam_kwargs['suffix'] = args.suffix
-                logger.info(f'Running {args.vis_mode} on image {image_index} at pixel ({pixel_i},{pixel_j}). Using filename suffix: {args.suffix}')
+                # gradcam_kwargs = {'image': image_index, 'pixel_i': pixel_i, 'pixel_j': pixel_j, 'class_name': top_class_name}
+                # if args.suffix:
+                #     gradcam_kwargs['suffix'] = args.suffix
+                # logger.info(f'Running {args.vis_mode} on image {image_index} at pixel ({pixel_i},{pixel_j}). Using filename suffix: {args.suffix}')
                 output_pixel_i, output_pixel_j = compute_output_coord(pixel_i, pixel_j, test_size, pred_probs.shape[2:])
-
-                # ordered_class_names = [class_names[i] for i in pred_labels[0,:,pixel_i,pixel_j]]
-                # target_index = ordered_class_names.index('car')
-                print("TOP CLASS", pred_labels[0, 0, pixel_i, pixel_j], pred_probs[0,0,pixel_i,pixel_j], class_names[pred_labels[0, 0, pixel_i, pixel_j]])
-                print("######################################")
                 target_index = 0
                 if not getattr(Saliency, 'whole_image', False):
                     gradcam.backward(pred_labels[:, [target_index], :, :], output_pixel_i, output_pixel_j)
 
-                if args.crop_size <= 0:
-                    generate_and_save_saliency(image_index, pixel_i, pixel_j)
-                else:
-                    generate_and_save_saliency(image_index, pixel_i, pixel_j, args.crop_size)
-                print("AVERAGE SO FAR", np.average(pct_pixels_inside_list))
-                print("AVERAGE MASS SO FAR", np.average(pct_mass_inside_list))
+                gradcam_region = gradcam.generate(target_layer=target_layers[0], normalize=False).cpu()
+                __import__('ipdb').set_trace()
+                output_pixel_i, output_pixel_j = compute_output_coord(next_i, next_j, test_size, pred_probs.shape[2:])
+                target_index = 0
+                if not getattr(Saliency, 'whole_image', False):
+                    gradcam.backward(pred_labels[:, [target_index], :, :], output_pixel_i, output_pixel_j)
 
-            logger.info(f'=> Final bounds are: ({minimum}, {maximum})')
+                second_region = gradcam.generate(target_layer=target_layers[0], normalize=False).cpu()
+
+                __import__('ipdb').set_trace()
+
+                # now `gradcam_region` and `second_region` contain both saliency maps for two pixels of the
+                # same class but at least 800px apart.
+
+
+
+
+                # ordered_class_names = [class_names[i] for i in pred_labels[0,:,pixel_i,pixel_j]]
+                # target_index = ordered_class_names.index('car')
+                # print("TOP CLASS", pred_labels[0, 0, pixel_i, pixel_j], pred_probs[0,0,pixel_i,pixel_j], class_names[pred_labels[0, 0, pixel_i, pixel_j]])
+                # print("######################################")
+
+                # if args.crop_size <= 0:
+                #     generate_and_save_saliency(image_index, pixel_i, pixel_j)
+                # else:
+                #     generate_and_save_saliency(image_index, pixel_i, pixel_j, args.crop_size)
+
+            # logger.info(f'=> Final bounds are: ({minimum}, {maximum})')
 
     # Instantiate wrapper once, outside of loop
     Saliency = METHODS[args.vis_mode]
