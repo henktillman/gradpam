@@ -382,9 +382,10 @@ def main():
     if config.NBDT.USE_NBDT:
         target_layers = ['model.' + layer for layer in target_layers]
 
+    dmg_by_cls = [[] for _ in class_names]
     def generate_and_save_saliency(
             image_index, pixel_i=None, pixel_j=None, crop_size=None,
-            normalize=False):
+            cls_index=0, normalize=False, previous_pred=1):
         """too lazy to move out to global lol"""
         nonlocal maximum, minimum, label
         # Generate GradCAM + save heatmap
@@ -408,18 +409,19 @@ def main():
             heatmaps.append(gradcam_region)
             print('start')
             image = test_dataset[image_index][0]
-            coords = gradcam_region.nonzero().cpu().numpy()
+            # coords = gradcam_region.nonzero().cpu().numpy()
 
-            centered_coords = coords - np.array([0, 0, pixel_i, pixel_j])
-            centered_coords = np.abs(centered_coords)
-            # Filter function for determining whether pixel is within receptive field
-            f = lambda x: x[2] < 200 and x[3] < 200
-            within_receptive_field = np.apply_along_axis(f, 1, centered_coords)
-            coords = coords[within_receptive_field]
-            gradcam_region = gradcam_region.cpu()
-            def v(x):
-                return gradcam_region[x[0], x[1], x[2], x[3]]
-            within_weight = np.apply_along_axis(v, 1, coords).sum()
+            __import__('ipdb').set_trace()
+            # centered_coords = coords - np.array([0, 0, pixel_i, pixel_j])
+            # centered_coords = np.abs(centered_coords)
+            # # Filter function for determining whether pixel is within receptive field
+            # f = lambda x: x[2] < 200 and x[3] < 200
+            # within_receptive_field = np.apply_along_axis(f, 1, centered_coords)
+            # coords = coords[within_receptive_field]
+            # gradcam_region = gradcam_region.cpu()
+            # def v(x):
+            #     return gradcam_region[x[0], x[1], x[2], x[3]]
+            # within_weight = np.apply_along_axis(v, 1, coords).sum()
 
             # count = 0
             # inside_mass = 0
@@ -432,23 +434,36 @@ def main():
             #         count += 1
             #         inside_mass += gradcam_region[coord[0], coord[1], coord[2], coord[3]]
 
-            percent_mass_inside = within_weight / gradcam_region.sum()
-            percent_mass_outside = 1 - percent_mass_inside
-            percent_pixels_inside = np.sum(within_receptive_field) / len(within_receptive_field)
-            percent_pixels_outside = 1 - percent_pixels_inside
+            # percent_mass_inside = within_weight / gradcam_region.sum()
+            # percent_mass_outside = 1 - percent_mass_inside
+            # percent_pixels_inside = np.sum(within_receptive_field) / len(within_receptive_field)
+            # percent_pixels_outside = 1 - percent_pixels_inside
 
-            pct_mass_inside_list.append(percent_mass_inside)
-            pct_pixels_inside_list.append(percent_pixels_inside)
+            # pct_mass_inside_list.append(percent_mass_inside)
+            # pct_pixels_inside_list.append(percent_pixels_inside)
 
-            # image = torch.from_numpy(image).unsqueeze(0).to(gradcam_region.device)
-            # pred_probs, pred_labels = gradcam.forward(image)
-            # del image
-            # torch.cuda.empty_cache()
+            image = torch.from_numpy(image).unsqueeze(0).to(gradcam_region.device)
+
+
+            # Zero out pixels marked by the saliency map
+            coords_to_zero = gradcam_region != 0
+            image[:, 0:1, :, :][coords_to_zero] = 0
+            image[:, 1:2, :, :][coords_to_zero] = 0
+            image[:, 2:3, :, :][coords_to_zero] = 0
+
+            pred_probs, pred_labels = gradcam.forward(image)
+            # New location of the target class after occlusion
+            new_index = pred_labels[0, :, pixel_i, pixel_j].index(cls_index)
+            damage = previous_pred - pred_probs[0, new_index, pixel_i, pixel_j] #.item()?
+            dmg_by_cls[cls_index].append(damage)
+            del image
+            torch.cuda.empty_cache()
+
             # bar = pred_probs[:,:,pixel_i,pixel_j]
             # baz = pred_labels[:,:,pixel_i,pixel_j]
 
-            print("percent_mass_inside ", percent_mass_inside)
-            print("percent_pixels_inside ", percent_pixels_inside)
+            # print("percent_mass_inside ", percent_mass_inside)
+            # print("percent_pixels_inside ", percent_pixels_inside)
 
             # __import__('ipdb').set_trace()
             # image = test_dataset[image_index][0]
@@ -558,30 +573,23 @@ def main():
             logger.info(f'Running on {len(pixels)} pixels.')
 
             # for pixel_index in range(len(pixels)):
-            for _ in range(1):
+            for cls_index in range(len(class_names)):
                 # pixel_i, pixel_j = int(pixels[pixel_index][0]), int(pixels[pixel_index][1])
                 # pixel_i, pixel_j = int(args.pixel_i[0]), int(args.pixel_j[0])
 
-                # Loop until we find a matching pair of pixels
-                pixel_i, pixel_j, next_i, next_j = 0, 0, 0, 0
+                # list of all coords where the label matches the current class
+                # index.
+                matching_coords = np.array(np.where(label==cls_index)).T
+                pixel_i, pixel_j = 0, 0
                 # __import__('ipdb').set_trace()
                 found_matching = False
                 while not found_matching:
-                    pixel_i = random.randint(0, test_size[0])
-                    pixel_j = random.randint(0, test_size[1])
-                    true_label = label[pixel_i, pixel_j]
+                    coord = matching_coords[np.random.randint(0, matching_coords.shape[0])]
+                    pixel_i, pixel_j = coord[0], coord[1]
+                    if pred_labels[0, 0, pixel_i, pixel_j].item() == cls_index:
+                        found_matching = True
 
-                    for _ in range(1000):
-                        next_i = random.randint(0, test_size[0])
-                        next_j = random.randint(0, test_size[1])
-                        if label[next_i, next_j] != true_label or ((pixel_i - next_i)**2 + (pixel_j - next_j)**2)**0.5 <= 800:
-                            continue
-                        else:
-                            found_matching = True
-                            break
-
-                assert ((pixel_i - next_i)**2 + (pixel_j - next_j)**2)**0.5 > 800 and label[next_i, next_j] == true_label
-
+                assert pred_labels[0, 0, pixel_i, pixel_j].item() == cls_index
 
                 # pixel_i, pixel_j = ps[pixel_index]
 
@@ -591,10 +599,10 @@ def main():
                 assert pixel_i < test_size[0] and pixel_j < test_size[1], \
                     "Pixel ({},{}) is out of bounds for image of size ({},{})".format(
                         pixel_i,pixel_j,test_size[0],test_size[1])
-                assert next_i < test_size[0] and next_j < test_size[1], \
-                    "Pixel ({},{}) is out of bounds for image of size ({},{})".format(
-                        next_i,next_j,test_size[0],test_size[1])
 
+                # Get the current prediction confidence for the top class.
+                # Will use to compute occlusion damage later.
+                curr_pred = pred_probs[0, 0, pixel_i, pixel_j] # need .item() ?
                 # Run backward pass
                 # Note: Computes backprop wrt most likely predicted class rather than gt class
 
@@ -607,15 +615,7 @@ def main():
                 if not getattr(Saliency, 'whole_image', False):
                     gradcam.backward(pred_labels[:, [target_index], :, :], output_pixel_i, output_pixel_j)
 
-                gradcam_region = gradcam.generate(target_layer=target_layers[0], normalize=False).cpu()
-                __import__('ipdb').set_trace()
-                output_pixel_i, output_pixel_j = compute_output_coord(next_i, next_j, test_size, pred_probs.shape[2:])
-                target_index = 0
-                if not getattr(Saliency, 'whole_image', False):
-                    gradcam.backward(pred_labels[:, [target_index], :, :], output_pixel_i, output_pixel_j)
-
-                second_region = gradcam.generate(target_layer=target_layers[0], normalize=False).cpu()
-
+                # gradcam_region = gradcam.generate(target_layer=target_layers[0], normalize=False).cpu()
                 __import__('ipdb').set_trace()
 
                 # now `gradcam_region` and `second_region` contain both saliency maps for two pixels of the
@@ -629,10 +629,14 @@ def main():
                 # print("TOP CLASS", pred_labels[0, 0, pixel_i, pixel_j], pred_probs[0,0,pixel_i,pixel_j], class_names[pred_labels[0, 0, pixel_i, pixel_j]])
                 # print("######################################")
 
-                # if args.crop_size <= 0:
-                #     generate_and_save_saliency(image_index, pixel_i, pixel_j)
-                # else:
-                #     generate_and_save_saliency(image_index, pixel_i, pixel_j, args.crop_size)
+                if args.crop_size <= 0:
+                    generate_and_save_saliency(image_index, pixel_i, pixel_j, cls_index=cls_index, previous_pred=curr_pred)
+                else:
+                    generate_and_save_saliency(image_index, pixel_i, pixel_j, args.crop_size, cls_index=cls_index, previous_pred=curr_pred)
+
+                for i in range(len(dmg_by_cls)):
+                    if len(dmg_by_cls[i]) > 0:
+                        print(i, np.mean(dmg_by_cls[i]))
 
             # logger.info(f'=> Final bounds are: ({minimum}, {maximum})')
 
@@ -651,9 +655,10 @@ def main():
     if not nbdt_node_wnids:
         nbdt_node_wnid = None
         run()
+        for i in range(len(dmg_by_cls)):
+            if len(dmg_by_cls[i]) > 0:
+                print(i, np.mean(dmg_by_cls[i]))
         __import__('ipdb').set_trace()
-        print(np.average(pct_pixels_inside_list))
-        print(np.average(pct_mass_inside_list))
         print('done')
 
 
