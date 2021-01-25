@@ -389,29 +389,28 @@ def main():
         """too lazy to move out to global lol"""
         nonlocal maximum, minimum, label
         # Generate GradCAM + save heatmap
-        heatmaps = []
-        raw_image = retrieve_raw_image(test_dataset, image_index)
+        # raw_image = retrieve_raw_image(test_dataset, image_index)
 
-        should_crop = crop_size is not None and pixel_i is not None and pixel_j is not None
-        if should_crop:
-            raw_image = crop(pixel_i, pixel_j, crop_size, raw_image, is_tensor=False)
+        # should_crop = crop_size is not None and pixel_i is not None and pixel_j is not None
+        # if should_crop:
+        #     raw_image = crop(pixel_i, pixel_j, crop_size, raw_image, is_tensor=False)
 
         for layer in target_layers:
             gradcam_region = gradcam.generate(target_layer=layer, normalize=False)
 
-            if should_crop:
-                gradcam_region = crop(pixel_i, pixel_j, crop_size, gradcam_region, is_tensor=True)
+            # if should_crop:
+            #     gradcam_region = crop(pixel_i, pixel_j, crop_size, gradcam_region, is_tensor=True)
 
             maximum = max(float(gradcam_region.max()), maximum)
             minimum = min(float(gradcam_region.min()), minimum)
             logger.info(f'=> Bounds: ({minimum}, {maximum})')
 
-            heatmaps.append(gradcam_region)
+
             print('start')
             image = test_dataset[image_index][0]
             # coords = gradcam_region.nonzero().cpu().numpy()
 
-            __import__('ipdb').set_trace()
+            # __import__('ipdb').set_trace()
             # centered_coords = coords - np.array([0, 0, pixel_i, pixel_j])
             # centered_coords = np.abs(centered_coords)
             # # Filter function for determining whether pixel is within receptive field
@@ -453,10 +452,12 @@ def main():
 
             pred_probs, pred_labels = gradcam.forward(image)
             # New location of the target class after occlusion
-            new_index = pred_labels[0, :, pixel_i, pixel_j].index(cls_index)
-            damage = previous_pred - pred_probs[0, new_index, pixel_i, pixel_j] #.item()?
+            new_index = np.where(pred_labels[0, :, pixel_i, pixel_j].cpu().numpy() == cls_index)[0][0]
+            damage = previous_pred - pred_probs[0, new_index, pixel_i, pixel_j].item()
             dmg_by_cls[cls_index].append(damage)
             del image
+            del pred_probs
+            del pred_labels
             torch.cuda.empty_cache()
 
             # bar = pred_probs[:,:,pixel_i,pixel_j]
@@ -579,16 +580,19 @@ def main():
 
                 # list of all coords where the label matches the current class
                 # index.
-                matching_coords = np.array(np.where(label==cls_index)).T
+                matching_coords = np.random.permutation(np.array(np.where(label==cls_index)).T)
+                if matching_coords.shape[0] == 0:
+                    continue
                 pixel_i, pixel_j = 0, 0
-                # __import__('ipdb').set_trace()
                 found_matching = False
-                while not found_matching:
-                    coord = matching_coords[np.random.randint(0, matching_coords.shape[0])]
+                for coord in matching_coords:
                     pixel_i, pixel_j = coord[0], coord[1]
                     if pred_labels[0, 0, pixel_i, pixel_j].item() == cls_index:
                         found_matching = True
+                        break
 
+                if not found_matching:
+                    continue
                 assert pred_labels[0, 0, pixel_i, pixel_j].item() == cls_index
 
                 # pixel_i, pixel_j = ps[pixel_index]
@@ -602,7 +606,7 @@ def main():
 
                 # Get the current prediction confidence for the top class.
                 # Will use to compute occlusion damage later.
-                curr_pred = pred_probs[0, 0, pixel_i, pixel_j] # need .item() ?
+                curr_pred = pred_probs[0, 0, pixel_i, pixel_j].item()
                 # Run backward pass
                 # Note: Computes backprop wrt most likely predicted class rather than gt class
 
@@ -616,7 +620,7 @@ def main():
                     gradcam.backward(pred_labels[:, [target_index], :, :], output_pixel_i, output_pixel_j)
 
                 # gradcam_region = gradcam.generate(target_layer=target_layers[0], normalize=False).cpu()
-                __import__('ipdb').set_trace()
+                # __import__('ipdb').set_trace()
 
                 # now `gradcam_region` and `second_region` contain both saliency maps for two pixels of the
                 # same class but at least 800px apart.
@@ -634,9 +638,9 @@ def main():
                 else:
                     generate_and_save_saliency(image_index, pixel_i, pixel_j, args.crop_size, cls_index=cls_index, previous_pred=curr_pred)
 
-                for i in range(len(dmg_by_cls)):
-                    if len(dmg_by_cls[i]) > 0:
-                        print(i, np.mean(dmg_by_cls[i]))
+            for i in range(len(dmg_by_cls)):
+                if len(dmg_by_cls[i]) > 0:
+                    print(i, np.mean(dmg_by_cls[i]))
 
             # logger.info(f'=> Final bounds are: ({minimum}, {maximum})')
 
