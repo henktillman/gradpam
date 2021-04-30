@@ -330,6 +330,7 @@ def main():
     else:
         model_state_file = os.path.join(final_output_dir,
                                         'best.pth')
+    model_state_file = 'pretrained_models/hrnet_w18_small_model_v1.pth'
     logger.info('=> loading model from {}'.format(model_state_file))
     # __import__('ipdb').set_trace()
     pretrained_dict = torch.load(model_state_file)
@@ -454,7 +455,8 @@ def main():
             # New location of the target class after occlusion
             new_index = np.where(pred_labels[0, :, pixel_i, pixel_j].cpu().numpy() == cls_index)[0][0]
             damage = previous_pred - pred_probs[0, new_index, pixel_i, pixel_j].item()
-            dmg_by_cls[cls_index].append(damage)
+            # dmg_by_cls[cls_index].append(damage)
+            dmg_by_cls[cls_index].append((damage, image_index, [pixel_i, pixel_j]))
             del image
             del pred_probs
             del pred_labels
@@ -527,6 +529,7 @@ def main():
 
     def run():
         nonlocal maximum, minimum, label, gradcam_kwargs
+        np.random.seed(13)
         for image_index in get_image_indices(args.image_index, args.image_index_range):
             image, label, _, name = test_dataset[image_index]
             image = torch.from_numpy(image).unsqueeze(0).to(device)
@@ -574,74 +577,76 @@ def main():
             logger.info(f'Running on {len(pixels)} pixels.')
 
             # for pixel_index in range(len(pixels)):
-            for cls_index in range(len(class_names)):
+            # for cls_index in range(len(class_names)):
+            for _ in range(1):
+                cls_index = 17 # hardcode person
                 # pixel_i, pixel_j = int(pixels[pixel_index][0]), int(pixels[pixel_index][1])
                 # pixel_i, pixel_j = int(args.pixel_i[0]), int(args.pixel_j[0])
                 # list of all coords where the label matches the current class
                 # index.
-                for _ in range(5):
-                    matching_coords = np.random.permutation(np.array(np.where(label==cls_index)).T)
-                    if matching_coords.shape[0] == 0:
-                        continue
-                    pixel_i, pixel_j = 0, 0
-                    found_matching = False
-                    for coord in matching_coords:
-                        pixel_i, pixel_j = coord[0], coord[1]
-                        if pred_labels[0, 0, pixel_i, pixel_j].item() == cls_index:
-                            found_matching = True
-                            break
+                matching_coords = np.random.permutation(np.array(np.where(label==cls_index)).T)
+                if matching_coords.shape[0] == 0:
+                    continue
+                pixel_i, pixel_j = 0, 0
+                found_matching = False
+                for coord in matching_coords:
+                    pixel_i, pixel_j = coord[0], coord[1]
+                    if pred_labels[0, 0, pixel_i, pixel_j].item() == cls_index:
+                        found_matching = True
+                        break
 
-                    if not found_matching:
-                        continue
-                    assert pred_labels[0, 0, pixel_i, pixel_j].item() == cls_index
+                if not found_matching:
+                    continue
+                assert pred_labels[0, 0, pixel_i, pixel_j].item() == cls_index
 
-                    # pixel_i, pixel_j = ps[pixel_index]
+                # pixel_i, pixel_j = ps[pixel_index]
 
-                    # top_class_index = pred_labels[0,0,pixel_i,pixel_j]
-                    # top_class_name = class_names[top_class_index]
-                    # print("Running on pixel ({}, {})".format(pixel_i, pixel_j))
-                    assert pixel_i < test_size[0] and pixel_j < test_size[1], \
-                        "Pixel ({},{}) is out of bounds for image of size ({},{})".format(
-                            pixel_i,pixel_j,test_size[0],test_size[1])
+                # top_class_index = pred_labels[0,0,pixel_i,pixel_j]
+                # top_class_name = class_names[top_class_index]
+                # print("Running on pixel ({}, {})".format(pixel_i, pixel_j))
+                assert pixel_i < test_size[0] and pixel_j < test_size[1], \
+                    "Pixel ({},{}) is out of bounds for image of size ({},{})".format(
+                        pixel_i,pixel_j,test_size[0],test_size[1])
 
-                    # Get the current prediction confidence for the top class.
-                    # Will use to compute occlusion damage later.
-                    curr_pred = pred_probs[0, 0, pixel_i, pixel_j].item()
-                    # Run backward pass
-                    # Note: Computes backprop wrt most likely predicted class rather than gt class
+                # Get the current prediction confidence for the top class.
+                # Will use to compute occlusion damage later.
+                curr_pred = pred_probs[0, 0, pixel_i, pixel_j].item()
+                # Run backward pass
+                # Note: Computes backprop wrt most likely predicted class rather than gt class
 
-                    # gradcam_kwargs = {'image': image_index, 'pixel_i': pixel_i, 'pixel_j': pixel_j, 'class_name': top_class_name}
-                    # if args.suffix:
-                    #     gradcam_kwargs['suffix'] = args.suffix
-                    # logger.info(f'Running {args.vis_mode} on image {image_index} at pixel ({pixel_i},{pixel_j}). Using filename suffix: {args.suffix}')
-                    output_pixel_i, output_pixel_j = compute_output_coord(pixel_i, pixel_j, test_size, pred_probs.shape[2:])
-                    target_index = 0
-                    if not getattr(Saliency, 'whole_image', False):
-                        gradcam.backward(pred_labels[:, [target_index], :, :], output_pixel_i, output_pixel_j)
+                # gradcam_kwargs = {'image': image_index, 'pixel_i': pixel_i, 'pixel_j': pixel_j, 'class_name': top_class_name}
+                # if args.suffix:
+                #     gradcam_kwargs['suffix'] = args.suffix
+                # logger.info(f'Running {args.vis_mode} on image {image_index} at pixel ({pixel_i},{pixel_j}). Using filename suffix: {args.suffix}')
+                output_pixel_i, output_pixel_j = compute_output_coord(pixel_i, pixel_j, test_size, pred_probs.shape[2:])
+                target_index = 0
+                if not getattr(Saliency, 'whole_image', False):
+                    gradcam.backward(pred_labels[:, [target_index], :, :], output_pixel_i, output_pixel_j)
 
-                    # gradcam_region = gradcam.generate(target_layer=target_layers[0], normalize=False).cpu()
-                    # __import__('ipdb').set_trace()
+                # gradcam_region = gradcam.generate(target_layer=target_layers[0], normalize=False).cpu()
+                # __import__('ipdb').set_trace()
 
-                    # now `gradcam_region` and `second_region` contain both saliency maps for two pixels of the
-                    # same class but at least 800px apart.
-
+                # now `gradcam_region` and `second_region` contain both saliency maps for two pixels of the
+                # same class but at least 800px apart.
 
 
 
-                    # ordered_class_names = [class_names[i] for i in pred_labels[0,:,pixel_i,pixel_j]]
-                    # target_index = ordered_class_names.index('car')
-                    # print("TOP CLASS", pred_labels[0, 0, pixel_i, pixel_j], pred_probs[0,0,pixel_i,pixel_j], class_names[pred_labels[0, 0, pixel_i, pixel_j]])
-                    # print("######################################")
 
-                    if args.crop_size <= 0:
-                        generate_and_save_saliency(image_index, pixel_i, pixel_j, cls_index=cls_index, previous_pred=curr_pred)
-                    else:
-                        generate_and_save_saliency(image_index, pixel_i, pixel_j, args.crop_size, cls_index=cls_index, previous_pred=curr_pred)
+                # ordered_class_names = [class_names[i] for i in pred_labels[0,:,pixel_i,pixel_j]]
+                # target_index = ordered_class_names.index('car')
+                # print("TOP CLASS", pred_labels[0, 0, pixel_i, pixel_j], pred_probs[0,0,pixel_i,pixel_j], class_names[pred_labels[0, 0, pixel_i, pixel_j]])
+                # print("######################################")
 
-            for i in range(len(dmg_by_cls)):
-                if len(dmg_by_cls[i]) > 0:
-                    # print(i, np.mean(dmg_by_cls[i]))
-                    logger.info('{}, {}'.format(i, np.mean(dmg_by_cls[i])))
+                if args.crop_size <= 0:
+                    generate_and_save_saliency(image_index, pixel_i, pixel_j, cls_index=cls_index, previous_pred=curr_pred)
+                else:
+                    generate_and_save_saliency(image_index, pixel_i, pixel_j, args.crop_size, cls_index=cls_index, previous_pred=curr_pred)
+
+            # for i in range(len(dmg_by_cls)):
+            #     if len(dmg_by_cls[i]) > 0 and i == 16:
+            #         # print(i, np.mean(dmg_by_cls[i]))
+            #         # logger.info('{}, {}'.format(i, np.mean(dmg_by_cls[i])))
+            #         logger.info('{}, {}'.format(i, dmg_by_cls[i]))
 
             # logger.info(f'=> Final bounds are: ({minimum}, {maximum})')
 
@@ -660,9 +665,14 @@ def main():
     if not nbdt_node_wnids:
         nbdt_node_wnid = None
         run()
+        # for i in range(len(dmg_by_cls)):
+        #     if len(dmg_by_cls[i]) > 0:
+        #         logger.info('{}, {}'.format(i, np.mean(dmg_by_cls[i])))
         for i in range(len(dmg_by_cls)):
             if len(dmg_by_cls[i]) > 0:
-                logger.info('{}, {}'.format(i, np.mean(dmg_by_cls[i])))
+                # print(i, np.mean(dmg_by_cls[i]))
+                # logger.info('{}, {}'.format(i, np.mean(dmg_by_cls[i])))
+                logger.info('{}, {}'.format(i, dmg_by_cls[i]))
         # __import__('ipdb').set_trace()
         print('done')
 
